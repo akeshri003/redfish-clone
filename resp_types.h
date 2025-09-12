@@ -31,3 +31,18 @@ bool tryParseRespMessage(const string &data, size_t &consumed, RespValue &out, s
 // consumed (may be less than data.size() if trailing bytes exist).
 bool parseResp(const string &data, RespValue &out, size_t &consumed, string &error_message);
 
+// RESP value constructors
+RespValue makeSimpleString(const string &s);
+RespValue makeError(const string &s);
+RespValue makeInteger(long long v);
+RespValue makeBulkString(const string &s);
+RespValue makeNullBulkString();
+RespValue makeArray(const vector<RespValue> &elems);
+RespValue makeNullArray();
+
+// Serializer: encodes a RespValue into a string
+string serializeResp(const RespValue &v);
+
+// Dispatcher: execute a RESP Array command and return a RESP response
+RespValue dispatchCommand(const RespValue &cmd);
+
