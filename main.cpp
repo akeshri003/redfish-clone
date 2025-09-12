@@ -13,6 +13,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "resp_types.h"
+
 using namespace std;
 
 static constexpr int kDefaultPort = 6380;
@@ -163,10 +165,29 @@ int main(int argc, char** argv) {
                 while (true) {
                     ssize_t r = ::read(p.fd, buf, sizeof(buf));
                     if (r > 0) {
-                        // Echo server: push read bytes to outbuf
                         auto &conn = conns[p.fd];
                         conn.inbuf.append(buf, r);
-                        conn.outbuf.append(buf, r);
+
+                        // Try to parse and handle as many RESP messages as available
+                        while (true) {
+                            size_t consumed = 0;
+                            RespValue req;
+                            string perr;
+                            if (!tryParseRespMessage(conn.inbuf, consumed, req, perr)) {
+                                if (!perr.empty()) {
+                                    RespValue err = makeError(perr);
+                                    conn.outbuf += serializeResp(err);
+                                    // drop one byte to avoid infinite loop on malformed prefix
+                                    conn.inbuf.erase(0, max<size_t>(1, consumed));
+                                }
+                                break; // need more data
+                            }
+                            // Erase consumed bytes
+                            conn.inbuf.erase(0, consumed);
+                            // Dispatch
+                            RespValue resp = dispatchCommand(req);
+                            conn.outbuf += serializeResp(resp);
+                        }
                     } else if (r == 0) {
                         // Client closed
                         removeClient(i, pfds, conns);

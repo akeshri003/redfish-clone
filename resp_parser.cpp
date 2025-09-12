@@ -155,3 +155,177 @@ bool parseResp(const string &data, RespValue &out, size_t &consumed, string &err
     return tryParseRespMessage(data, consumed, out, error_message);
 }
 
+// ===================== Constructors =====================
+RespValue makeSimpleString(const string &s) {
+    RespValue v{Type::SimpleString};
+    v.buf = s;
+    return v;
+}
+
+RespValue makeError(const string &s) {
+    RespValue v{Type::Error};
+    v.buf = s;
+    return v;
+}
+
+RespValue makeInteger(long long x) {
+    RespValue v{Type::Integer};
+    v.integer = x;
+    return v;
+}
+
+RespValue makeBulkString(const string &s) {
+    RespValue v{Type::BulkString};
+    v.is_null = false;
+    v.buf = s;
+    return v;
+}
+
+RespValue makeNullBulkString() {
+    RespValue v{Type::BulkString};
+    v.is_null = true;
+    return v;
+}
+
+RespValue makeArray(const vector<RespValue> &elems) {
+    RespValue v{Type::Array};
+    v.is_null = false;
+    v.array = elems;
+    return v;
+}
+
+RespValue makeNullArray() {
+    RespValue v{Type::Array};
+    v.is_null = true;
+    return v;
+}
+
+// ===================== Serializer =====================
+static void appendCRLF(string &o) { 
+    o += "\r\n";
+}
+
+static void serializeInto(const RespValue &v, string &out) {
+    switch (v.type) {
+        case Type::SimpleString: {
+            out += '+';
+            out += v.buf;
+            appendCRLF(out);
+            break;
+        }
+        case Type::Error: {
+            out += '-';
+            out += v.buf;
+            appendCRLF(out);
+            break;
+        }
+        case Type::Integer: {
+            out += ':';
+            out += to_string(v.integer);
+            appendCRLF(out);
+            break;
+        }
+        case Type::BulkString: {
+            out += '$';
+            if (v.is_null) {
+                out += "-1";
+                appendCRLF(out);
+            } else {
+                out += to_string(v.buf.size());
+                appendCRLF(out);
+                out += v.buf;
+                appendCRLF(out);
+            }
+            break;
+        }
+        case Type::Array: {
+            out += '*';
+            if (v.is_null) {
+                out += "-1";
+                appendCRLF(out);
+            } else {
+                out += to_string(v.array.size());
+                appendCRLF(out);
+                for (const auto &e : v.array) serializeInto(e, out);
+            }
+            break;
+        }
+        case Type::Null: {
+            // Represent as Null Array by convention
+            out += '*';
+            out += "-1";
+            appendCRLF(out);
+            break;
+        }
+    }
+}
+
+string serializeResp(const RespValue &v) {
+    string out;
+    out.reserve(64);
+    serializeInto(v, out);
+    return out;
+}
+
+// ===================== Dispatcher =====================
+// Very small in-memory KV store for SET/GET/DEL
+static unordered_map<string, string> g_store;
+
+static string toUpperASCII(string s) {
+    for (char &c : s) c = (char)toupper((unsigned char)c);
+    return s;
+}
+
+static RespValue makeCommandError(const string &msg) {
+    return makeError("ERR " + msg);
+}
+
+// Expect command as RESP Array of Bulk Strings
+RespValue dispatchCommand(const RespValue &cmd) {
+    if (cmd.type != Type::Array || cmd.is_null) return makeCommandError("protocol error: expected array");
+    if (cmd.array.empty()) return makeCommandError("missing command");
+    // Ensure all elements are bulk strings
+    vector<string> args;
+    args.reserve(cmd.array.size());
+    for (const auto &e : cmd.array) {
+        if (e.type != Type::BulkString || e.is_null) return makeCommandError("arguments must be bulk strings");
+        args.push_back(e.buf);
+    }
+    string op = toUpperASCII(args[0]);
+
+    if (op == "PING") {
+        if (args.size() == 1) return makeSimpleString("PONG");
+        if (args.size() == 2) return makeBulkString(args[1]);
+        return makeCommandError("wrong number of arguments for 'PING'");
+    }
+
+    if (op == "ECHO") {
+        if (args.size() != 2) return makeCommandError("wrong number of arguments for 'ECHO'");
+        return makeBulkString(args[1]);
+    }
+
+    if (op == "SET") {
+        if (args.size() != 3) return makeCommandError("wrong number of arguments for 'SET'");
+        g_store[args[1]] = args[2];
+        return makeSimpleString("OK");
+    }
+
+    if (op == "GET") {
+        if (args.size() != 2) return makeCommandError("wrong number of arguments for 'GET'");
+        auto it = g_store.find(args[1]);
+        if (it == g_store.end()) return makeNullBulkString();
+        return makeBulkString(it->second);
+    }
+
+    if (op == "DEL") {
+        if (args.size() < 2) return makeCommandError("wrong number of arguments for 'DEL'");
+        long long removed = 0;
+        for (size_t i = 1; i < args.size(); ++i) {
+            removed += (g_store.erase(args[i]) > 0) ? 1 : 0;
+        }
+        return makeInteger(removed);
+    }
+
+    return makeError("ERR unknown command '" + args[0] + "'");
+}
+
