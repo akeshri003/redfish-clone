@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <bits/stdc++.h>
 #include <cstring>
+#include <optional>
 
 using namespace std;
 
@@ -45,4 +46,13 @@ string serializeResp(const RespValue &v);
 
 // Dispatcher: execute a RESP Array command and return a RESP response
 RespValue dispatchCommand(const RespValue &cmd);
+
+// Value: data type for KV store
+struct Value {
+    string val;
+    int ttl;
+
+    Value(string v, int exp) : val(v), ttl(exp) {};
+    Value(string v) : val(v), ttl(-1) {};
+};
 

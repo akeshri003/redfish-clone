@@ -86,7 +86,7 @@ static bool parseArray(const string &s, size_t start, size_t &next, RespValue &o
             return false;
         }
         consumed_elem = tmpConsumed;
-        out.array.push_back(std::move(elem));
+        out.array.push_back(move(elem));
         cursor += consumed_elem;
     }
     next = cursor;
@@ -265,67 +265,5 @@ string serializeResp(const RespValue &v) {
     out.reserve(64);
     serializeInto(v, out);
     return out;
-}
-
-// ===================== Dispatcher =====================
-// Very small in-memory KV store for SET/GET/DEL
-static unordered_map<string, string> g_store;
-
-static string toUpperASCII(string s) {
-    for (char &c : s) c = (char)toupper((unsigned char)c);
-    return s;
-}
-
-static RespValue makeCommandError(const string &msg) {
-    return makeError("ERR " + msg);
-}
-
-// Expect command as RESP Array of Bulk Strings
-RespValue dispatchCommand(const RespValue &cmd) {
-    if (cmd.type != Type::Array || cmd.is_null) return makeCommandError("protocol error: expected array");
-    if (cmd.array.empty()) return makeCommandError("missing command");
-    // Ensure all elements are bulk strings
-    vector<string> args;
-    args.reserve(cmd.array.size());
-    for (const auto &e : cmd.array) {
-        if (e.type != Type::BulkString || e.is_null) return makeCommandError("arguments must be bulk strings");
-        args.push_back(e.buf);
-    }
-    string op = toUpperASCII(args[0]);
-
-    if (op == "PING") {
-        if (args.size() == 1) return makeSimpleString("PONG");
-        if (args.size() == 2) return makeBulkString(args[1]);
-        return makeCommandError("wrong number of arguments for 'PING'");
-    }
-
-    if (op == "ECHO") {
-        if (args.size() != 2) return makeCommandError("wrong number of arguments for 'ECHO'");
-        return makeBulkString(args[1]);
-    }
-
-    if (op == "SET") {
-        if (args.size() != 3) return makeCommandError("wrong number of arguments for 'SET'");
-        g_store[args[1]] = args[2];
-        return makeSimpleString("OK");
-    }
-
-    if (op == "GET") {
-        if (args.size() != 2) return makeCommandError("wrong number of arguments for 'GET'");
-        auto it = g_store.find(args[1]);
-        if (it == g_store.end()) return makeNullBulkString();
-        return makeBulkString(it->second);
-    }
-
-    if (op == "DEL") {
-        if (args.size() < 2) return makeCommandError("wrong number of arguments for 'DEL'");
-        long long removed = 0;
-        for (size_t i = 1; i < args.size(); ++i) {
-            removed += (g_store.erase(args[i]) > 0) ? 1 : 0;
-        }
-        return makeInteger(removed);
-    }
-
-    return makeError("ERR unknown command '" + args[0] + "'");
 }
 
