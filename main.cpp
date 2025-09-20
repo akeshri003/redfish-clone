@@ -119,6 +119,11 @@ void removeClient(int index,  vector<pollfd> &pfds, unordered_map<int, Connectio
 
 int main(int argc, char** argv) {
     int port = (argc > 2) ? stoi(argv[1]) : kDefaultPort;
+    
+    // Initialize AOF and replay if enabled
+    initAOF();
+    replayAOF();
+    
     int lfd = createListenSocket(port);
     
     // pollfd list: index 0 is always the listening socket
@@ -199,35 +204,67 @@ int main(int argc, char** argv) {
                 while (true) {
                     ssize_t r = ::read(p.fd, buf, sizeof(buf));
                     if (r > 0) {
+                        // cout << "Read " << r << " bytes from client " << p.fd << endl;
                         auto &conn = conns[p.fd];
                         conn.inbuf.append(buf, r);
+                        // cout << "Total inbuf size: " << conn.inbuf.size() << endl;
+                        // cout << "Inbuf content: ";
+                        // for (char c : conn.inbuf) {
+                        //     if (c >= 32 && c < 127) cout << c;
+                        //     else cout << "\\x" << hex << (int)(unsigned char)c << dec;
+                        // }
+                        // cout << endl;
 
                         // Try to parse and handle as many RESP messages as available
                         while (true) {
                             size_t consumed = 0;
                             RespValue req;
                             string perr;
+                            // cout << "Trying to parse RESP message..." << endl;
                             if (!tryParseRespMessage(conn.inbuf, consumed, req, perr)) {
                                 if (!perr.empty()) {
                                     RespValue err = makeError(perr);
                                     conn.appendToOutbuf(serializeResp(err));
                                     // drop one byte to avoid infinite loop on malformed prefix
                                     conn.inbuf.erase(0, max<size_t>(1, consumed));
-                                }
+                                } 
+                                // else {
+                                //     // cout << "Need more data" << endl;
+                                // }
                                 break; // need more data
                             }
+
+                            // cout << "Successfully parsed, consumed " << consumed << " bytes" << endl;
                             // Erase consumed bytes
                             conn.inbuf.erase(0, consumed);
                             // Dispatch
+                            // cout << "Dispatching command..." << endl;
                             RespValue resp = dispatchCommand(req);
-                            conn.appendToOutbuf(serializeResp(resp));
+                            string serialized = serializeResp(resp);
+                            conn.appendToOutbuf(serialized);
+                            // cout << "Response serialized: '";
+                            // for (char c : serialized) {
+                            //     if (c == '\r') cout << "\\r";
+                            //     else if (c == '\n') cout << "\\n";
+                            //     else if (c >= 32 && c < 127) cout << c;
+                            //     else cout << "\\x" << hex << (int)(unsigned char)c << dec;
+                            // }
+                            // cout << "'" << endl;
+                            // cout << "Sending immediate response: " << serialized.size() << " bytes" << endl;
+
+                            // Try immediate write for debugging
+                            // ssize_t written = ::write(p.fd, serialized.data(), serialized.size());
+                            // cout << "Wrote " << written << " bytes" << endl;
+                            // cout << "Added to outbuf, size now: " << conn.outbuf.size() << endl;
                         }
                     } else if (r == 0) {
                         // Client closed
+                        // cout << "Client " << p.fd << " closed connection" << endl;
                         removeClient(i, pfds, conns);
                         goto next_fd; // pfds[i] is now swapped; skip to next
                     } else {
                         if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                        // cout << "Read error from client " << p.fd << ": " << strerror(errno) << endl;
                         perror("read");
                         removeClient(i, pfds, conns);
                         goto next_fd;

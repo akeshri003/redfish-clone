@@ -51,13 +51,40 @@ RespValue dispatchCommand(const RespValue &cmd);
 // Cleanup expired keys from the cache
 void cleanupExpiredKeys();
 
+// Memory management functions
+size_t estimateMemoryUsage();
+void triggerEvictionIfNeeded();
+void evictLFUKeys(size_t target_memory);
+
+// AOF functions
+void initAOF();
+void appendToAOF(const string& command);
+void replayAOF();
+void fsyncAOF();
+
 // Value: data type for KV store
 struct Value {
     string val;
     int64_t ttl_ms;  // TTL in milliseconds since epoch, -1 means no expiration
+    uint32_t access_count;  // LFU frequency counter
+    int64_t last_access_time;  // Last access time for LFU decay
 
-    Value() : val(""), ttl_ms(-1) {};  // Default constructor
-    Value(string v, int64_t exp_ms) : val(v), ttl_ms(exp_ms) {};
-    Value(string v) : val(v), ttl_ms(-1) {};
+    Value() : val(""), ttl_ms(-1), access_count(0), last_access_time(0) {};  // Default constructor
+    Value(string v, int64_t exp_ms) : val(v), ttl_ms(exp_ms), access_count(0), last_access_time(0) {};
+    Value(string v) : val(v), ttl_ms(-1), access_count(0), last_access_time(0) {};
+};
+
+// Memory management and AOF structures
+struct MemoryStats {
+    size_t estimated_memory = 0;
+    size_t memory_limit = 100 * 1024 * 1024;  // 100MB default limit
+    uint64_t evictions_total = 0;
+};
+
+struct AOFConfig {
+    bool enabled = false;
+    string filename = "redis.aof";
+    bool appendfsync_everysec = true;
+    int64_t last_fsync_time = 0;
 };
 

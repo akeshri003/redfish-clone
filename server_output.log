@@ -1,0 +1,43 @@
+Client Socket Created
+Server address assigned
+Binding successful
+Now Listening
+Client 4 connected
+Read 14 bytes from client 4
+Total inbuf size: 14
+Inbuf content: *1\xd\xa$4\xd\xaPING\xd\xa
+Trying to parse RESP message...
+Successfully parsed, consumed 14 bytes
+Dispatching command...
+Response: +PONG
+
+Added to outbuf, size now: 7
+Trying to parse RESP message...
+Need more data
+Client 4 disconnected
+Client 4 connected
+Read 33 bytes from client 4
+Total inbuf size: 33
+Inbuf content: *3\xd\xa$3\xd\xaSET\xd\xa$3\xd\xakey\xd\xa$5\xd\xavalue\xd\xa
+Trying to parse RESP message...
+Successfully parsed, consumed 33 bytes
+Dispatching command...
+Response: +OK
+
+Added to outbuf, size now: 5
+Trying to parse RESP message...
+Need more data
+Client 4 disconnected
+Client 4 connected
+Read 22 bytes from client 4
+Total inbuf size: 22
+Inbuf content: *2\xd\xa$3\xd\xaGET\xd\xa$3\xd\xakey\xd\xa
+Trying to parse RESP message...
+Successfully parsed, consumed 22 bytes
+Dispatching command...
+Response: $5
+value
+
+Added to outbuf, size now: 11
+Trying to parse RESP message...
+Need more data
