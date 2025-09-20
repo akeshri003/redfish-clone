@@ -1,6 +1,7 @@
-#include <stdlib.h>
-#include <bits/stdc++.h>
+#include <cstdlib>
 #include <cstring>
+#include <string>
+#include <vector>
 #include <optional>
 
 using namespace std;
@@ -47,12 +48,16 @@ string serializeResp(const RespValue &v);
 // Dispatcher: execute a RESP Array command and return a RESP response
 RespValue dispatchCommand(const RespValue &cmd);
 
+// Cleanup expired keys from the cache
+void cleanupExpiredKeys();
+
 // Value: data type for KV store
 struct Value {
     string val;
-    int ttl;
+    int64_t ttl_ms;  // TTL in milliseconds since epoch, -1 means no expiration
 
-    Value(string v, int exp) : val(v), ttl(exp) {};
-    Value(string v) : val(v), ttl(-1) {};
+    Value() : val(""), ttl_ms(-1) {};  // Default constructor
+    Value(string v, int64_t exp_ms) : val(v), ttl_ms(exp_ms) {};
+    Value(string v) : val(v), ttl_ms(-1) {};
 };
 

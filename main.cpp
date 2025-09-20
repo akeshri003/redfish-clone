@@ -12,6 +12,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <chrono>
 
 #include "resp_types.h"
 
@@ -21,11 +22,26 @@ static constexpr int kDefaultPort = 6380;
 static constexpr int maxPending = 128;
 static constexpr int kMaxEvents = 1024;
 static constexpr int kReadChunk = 4096;
+static constexpr size_t kMaxOutbufSize = 2 * 1024 * 1024; // 2MB cap per connection
+static constexpr size_t kWriteBudgetPerLoop = 64 * 1024; // 64KB write budget per loop iteration
 
 struct Connection {
     string inbuf;
     string outbuf;
     bool closed = false;
+    
+    // Helper methods for buffer management
+    bool isOutbufFull() const {
+        return outbuf.size() >= kMaxOutbufSize;
+    }
+    
+    void appendToOutbuf(const string& data) {
+        outbuf += data;
+    }
+    
+    void removeFromOutbuf(size_t bytes) {
+        outbuf.erase(0, bytes);
+    }
 };
 
 int setNonBlocking(int fd) {
@@ -84,14 +100,14 @@ int createListenSocket(int port)
     return serverSocket;
 }
 
-int addClient(int client_fd, vector<pollfd> &pfds, unordered_map<int, Connection> &conns) {
+void addClient(int client_fd, vector<pollfd> &pfds, unordered_map<int, Connection> &conns) {
     setNonBlocking(client_fd);
     pfds.push_back({client_fd, POLLIN, 0});
     conns.emplace(client_fd, Connection{});
     cout << "Client " << client_fd << " connected\n";
 }
 
-int removeClient(int index,  vector<pollfd> &pfds, unordered_map<int, Connection> &conns) {
+void removeClient(int index,  vector<pollfd> &pfds, unordered_map<int, Connection> &conns) {
     int fd = pfds[index].fd;
     cout << "Client " << fd << " disconnected\n";
     conns.erase(fd);
@@ -112,14 +128,32 @@ int main(int argc, char** argv) {
 
     unordered_map<int, Connection> conns;
 
+    // Timer for periodic cleanup of expired keys
+    auto lastCleanup = chrono::steady_clock::now();
+    constexpr auto cleanupInterval = chrono::seconds(5); // Cleanup every 5 seconds
+
     while (true) {
+        // Global write budget for this loop iteration
+        size_t remainingWriteBudget = kWriteBudgetPerLoop;
+        // Check if it's time for periodic cleanup
+        auto now = chrono::steady_clock::now();
+        if (now - lastCleanup >= cleanupInterval) {
+            cleanupExpiredKeys();
+            lastCleanup = now;
+        }
+
         // Update POLLOUT flags for sockets with pending output
+        // Also manage POLLIN based on outbuf size to prevent backpressure
         for (size_t i = 1; i < pfds.size(); ++i) {
             int fd = pfds[i].fd;
             auto it = conns.find(fd);
             if (it != conns.end()) {
                 if (!it->second.outbuf.empty()) {
-                    pfds[i].events = POLLIN | POLLOUT;
+                    pfds[i].events = POLLOUT;
+                    // Only enable POLLIN if outbuf is not full (backpressure control)
+                    if (!it->second.isOutbufFull()) {
+                        pfds[i].events |= POLLIN;
+                    }
                 } else {
                     pfds[i].events = POLLIN;
                 }
@@ -176,7 +210,7 @@ int main(int argc, char** argv) {
                             if (!tryParseRespMessage(conn.inbuf, consumed, req, perr)) {
                                 if (!perr.empty()) {
                                     RespValue err = makeError(perr);
-                                    conn.outbuf += serializeResp(err);
+                                    conn.appendToOutbuf(serializeResp(err));
                                     // drop one byte to avoid infinite loop on malformed prefix
                                     conn.inbuf.erase(0, max<size_t>(1, consumed));
                                 }
@@ -186,7 +220,7 @@ int main(int argc, char** argv) {
                             conn.inbuf.erase(0, consumed);
                             // Dispatch
                             RespValue resp = dispatchCommand(req);
-                            conn.outbuf += serializeResp(resp);
+                            conn.appendToOutbuf(serializeResp(resp));
                         }
                     } else if (r == 0) {
                         // Client closed
@@ -207,9 +241,18 @@ int main(int argc, char** argv) {
                 if (it != conns.end() && !it->second.outbuf.empty()) {
                     const char* data = it->second.outbuf.data();
                     size_t len = it->second.outbuf.size();
-                    ssize_t w = ::write(p.fd, data, len);
+                    
+                    // Apply write budget: limit bytes per fd to prevent starvation
+                    size_t maxWrite = min(len, remainingWriteBudget);
+                    if (maxWrite == 0) {
+                        // No more write budget for this iteration, skip to next fd
+                        continue;
+                    }
+                    
+                    ssize_t w = ::write(p.fd, data, maxWrite);
                     if (w > 0) {
-                        it->second.outbuf.erase(0, static_cast<size_t>(w));
+                        it->second.removeFromOutbuf(static_cast<size_t>(w));
+                        remainingWriteBudget -= static_cast<size_t>(w);
                     } else if (w < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
                         perror("write");
                         removeClient(i, pfds, conns);
